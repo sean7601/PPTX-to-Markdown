@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>PPTX → Markdown extractor</title>
+
+  <!-- Libraries (no framework, all client-side) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 3rem auto; line-height: 1.4; }
+    h1   { font-size: 1.5rem; margin-bottom: 1rem; }
+    input[type=file] { margin: 0.5rem 0 1rem 0; }
+    button           { padding: 0.5rem 1rem; cursor: pointer; }
+    textarea         { width: 100%; height: 300px; margin-top: 1rem; font-family: monospace; }
+    .hidden          { display: none; }
+  </style>
+</head>
+<body>
+  <h1>PPTX → Markdown extractor</h1>
+
+  <input id="pptxInput" type="file" accept=".pptx" />
+  <br />
+  <button id="convertBtn" disabled>Convert & Download Markdown</button>
+
+  <!-- Optional preview; remove if you don’t want it -->
+  <textarea id="previewBox" class="hidden" readonly></textarea>
+
+  <script>
+
+// PPTX → Markdown extractor (vanilla JS)
+
+const fileInput   = document.getElementById("pptxInput");
+const convertBtn  = document.getElementById("convertBtn");
+const previewBox  = document.getElementById("previewBox");
+
+// Enable button once a file is chosen
+fileInput.addEventListener("change", () => {
+  convertBtn.disabled = !fileInput.files.length;
+});
+
+// Main entry point
+convertBtn.addEventListener("click", async () => {
+  const file = fileInput.files[0];
+  if (!file) return;
+
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const zip = await JSZip.loadAsync(arrayBuffer);
+
+    // Collect slide files (ppt/slides/slideN.xml)
+    const slideXmlPaths = Object.keys(zip.files)
+      .filter((p) => /^ppt\/slides\/slide\d+\.xml$/.test(p))
+      .sort((a, b) => {
+        // Ensure Slide 2 comes before Slide 10, etc.
+        const num = (s) => parseInt(s.match(/slide(\d+)\.xml$/)[1], 10);
+        return num(a) - num(b);
+      });
+
+    const markdownParts = [];
+
+    for (let i = 0; i < slideXmlPaths.length; i++) {
+      const xmlText = await zip.file(slideXmlPaths[i]).async("string");
+      const md = extractMarkdownFromSlide(xmlText, i + 1);
+      markdownParts.push(md);
+    }
+
+    const fullMarkdown = markdownParts.join("\n\n---\n\n");
+    downloadMarkdown(fullMarkdown, file.name.replace(/\.pptx$/i, "") + ".md");
+    showPreview(fullMarkdown);  // remove this line if no preview desired
+  } catch (err) {
+    console.error(err);
+    alert("Something went wrong extracting the PPTX.");
+  }
+});
+
+/**
+ * Convert a single slide XML into markdown.
+ * Handles plain text and bullet levels (lvl="1"… in <a:pPr>).
+ */
+function extractMarkdownFromSlide(xml, slideNumber) {
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  const paragraphs = Array.from(doc.getElementsByTagName("a:p"));
+
+  const lines = [];
+  lines.push(`# Slide ${slideNumber}`);
+
+  paragraphs.forEach((p) => {
+    // Get bullet/indent level (default 0)
+    let lvl = 0;
+    const pPr = p.getElementsByTagName("a:pPr")[0];
+    if (pPr && pPr.hasAttribute("lvl")) lvl = parseInt(pPr.getAttribute("lvl"), 10);
+
+    // Gather all text runs inside this paragraph
+    const texts = Array.from(p.getElementsByTagName("a:t")).map((t) => t.textContent).join("");
+    const cleaned = texts.trim();
+    if (!cleaned) return;
+
+    if (lvl > 0) {
+      const indent = "  ".repeat(lvl - 1);          // 2 spaces per level
+      lines.push(`${indent}- ${cleaned}`);          // bullet list
+    } else {
+      lines.push(cleaned);                          // normal paragraph / heading
+    }
+  });
+
+  return lines.join("\n");
+}
+
+/** Trigger a download of the generated markdown */
+function downloadMarkdown(content, filename = "slides.md") {
+  const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+  saveAs(blob, filename);
+}
+
+/** Optional: show markdown in page for quick inspection */
+function showPreview(markdown) {
+  previewBox.classList.remove("hidden");
+  previewBox.value = markdown;
+}
+
+
+</script>
+</body>
+</html>
